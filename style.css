@@ -81,7 +81,7 @@ input[type=range]{accent-color:var(--brand);height:26px}
 .btn-xl{width:100%;padding:15px;font-size:1.08rem;margin-top:20px;border-radius:14px}
 
 /* ---------- 结果 ---------- */
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .stat{background:var(--brand-soft);border-radius:12px;padding:12px;text-align:center}
 .stat b{display:block;font-size:1.3rem;color:var(--brand-deep)}
 .stat span{font-size:.75rem;color:var(--muted)}

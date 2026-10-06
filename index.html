@@ -104,6 +104,16 @@
         <p class="hint">照片开、卡通关，是最常用的组合</p>
       </div>
 
+      <div class="field">
+        <label for="borderSel">外圈描边 <span class="accent">必选</span></label>
+        <select id="borderSel">
+          <option value="auto" selected>自动 · AI 挑对比色（推荐）</option>
+          <option value="black">黑色描边</option>
+          <option value="white">白色描边</option>
+        </select>
+        <p class="hint">描边贴着图案轮廓走一圈（像贴纸描边）；人像照片等铺满图会自动改为外框</p>
+      </div>
+
       <div class="field field-check">
         <label class="switch-row"><input type="checkbox" id="enhanceChk" checked><span>自动优化画质（对比度+饱和度）</span></label>
         <label class="switch-row"><input type="checkbox" id="cutBgChk"><span>去除纯色背景（做摆件/钥匙扣神器）</span></label>
@@ -120,6 +130,7 @@
       <div class="stat"><b id="statSize">—</b><span>尺寸（颗）</span></div>
       <div class="stat"><b id="statTotal">—</b><span>总豆数</span></div>
       <div class="stat"><b id="statColors">—</b><span>用色数</span></div>
+      <div class="stat"><b id="statBorder">—</b><span id="statBorderLabel">描边豆数</span></div>
     </div>
 
     <div class="preview-bar">
@@ -147,6 +158,7 @@
     <details><summary>图片会被上传吗？</summary><p>不会。豆图纸是纯网页工具，全部处理在你的浏览器里完成，断网都能用，没有服务器也就没有泄露。</p></details>
     <details><summary>色号和我买的豆子对得上吗？</summary><p>色板数据来自公开色卡整理（MARD 221/291、Perler、Hama、Artkal S、Nabbi）。不同批次豆子可能有轻微色差，下单前建议按豆号小样核对。</p></details>
     <details><summary>多大尺寸合适？</summary><p>钥匙扣选 29；手机壳/冰箱贴选 50～58；挂画 75～100；巨幅像素画 150+。宽度定了之后高度按图片比例自动计算。</p></details>
+    <details><summary>为什么每张图纸都有黑/白描边？</summary><p>这是豆图纸的硬性设计：描边贴着图案轮廓走一圈（像贴纸的描边），熨烫时边缘不易散、成品更立体上镜，配豆时也不用纠结边缘颜色。可以选黑边、白边，或让 AI 按图案边缘明暗自动挑对比色。搭配「去除纯色背景」就是标准的异形钥匙扣做法。</p></details>
     <details><summary>免费？图什么？</summary><p>免费、无广告、无注册。喜欢的话把链接分享给拼豆搭子就行。</p></details>
   </section>
 

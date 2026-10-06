@@ -51,6 +51,7 @@ const state={
   palette:null,
   map:null, w:0, h:0,
   counts:null, total:0, usedCount:0,
+  borderIdx:-1, borderLabel:'',
   busy:false, regenTimer:null,
 };
 
@@ -162,13 +163,24 @@ function star(x,cx,cy,r){
 
 /* ================= 参数 ================= */
 function gridW(){ return Math.max(10, Math.min(220, parseInt($('gridSize').value,10)||58)); }
+/* 图案区尺寸 + 描边一圈后的成品尺寸（成品 = 用户选的豆板宽度，保证放得下） */
+function computeDims(){
+  let dw=Math.max(8,gridW()-2);
+  let dh=Math.round(dw*state.srcH/state.srcW);
+  if(dh>218){ dh=218; dw=Math.max(8,Math.round(dh*state.srcW/state.srcH)); }
+  if(dh<8){ dh=8; }
+  return { dw, dh, fw:dw+2, fh:dh+2 };
+}
 function updateSizeLabel(){
-  if(!state.bitmap){ $('sizeOut').textContent=`${gridW()} 颗宽 · 高度按图片比例自动算`; $('gridSizeLabel').textContent=gridW(); return; }
-  const w=gridW(); let h=Math.round(w*state.srcH/state.srcW);
-  let rw=w;
-  if(h>220){ rw=Math.max(10,Math.round(220*w/h)); h=220; }
-  $('gridSizeLabel').textContent=rw;
-  $('sizeOut').textContent=`${rw}×${h} 颗 · 5mm 豆成品约 ${(rw*0.5).toFixed(0)}×${(h*0.5).toFixed(0)} cm`;
+  if(!state.bitmap){
+    const fw=gridW();
+    $('gridSizeLabel').textContent=fw;
+    $('sizeOut').textContent=`${fw} 颗宽 · 描边沿图案轮廓生成 · 高度按图片比例自动算`;
+    return;
+  }
+  const d=computeDims();
+  $('gridSizeLabel').textContent=d.fw;
+  $('sizeOut').textContent=`成品 ${d.fw}×${d.fh} 颗（描边沿图案轮廓，图案区 ${d.dw}×${d.dh}）· 5mm 豆约 ${(d.fw*0.5).toFixed(0)}×${(d.fh*0.5).toFixed(0)} cm`;
 }
 function currentParams(){
   return {
@@ -178,6 +190,7 @@ function currentParams(){
     dither:parseFloat($('ditherSel').value),
     enhance:$('enhanceChk').checked,
     cutBg:$('cutBgChk').checked,
+    border:$('borderSel').value,
   };
 }
 
@@ -196,16 +209,16 @@ function generateSync(){
   const p=currentParams();
   loadPalette();
 
-  let w=p.w, h=Math.round(w*state.srcH/state.srcW);
-  if(h>220){ w=Math.max(10,Math.round(220*w/h)); h=220; }
-  if(h<8){ h=8; }
+  /* 图案区尺寸（成品 = 图案区 + 描边一圈） */
+  const dims=computeDims();
+  const w=dims.dw, h=dims.dh;
 
   const img=drawScaled(state.bitmap,w,h,p.enhance);
   const px=img.data;
 
-  /* 去背景：四边像素取中位色 */
+  /* 背景检测：内容区四边取中位色（去背景与轮廓描边都要用） */
   let bgLab=null;
-  if(p.cutBg){
+  {
     const rs=[],gs=[],bs=[];
     const push=(i)=>{ rs.push(px[i]); gs.push(px[i+1]); bs.push(px[i+2]); };
     for(let x=0;x<w;x++){ push(x*4); push(((h-1)*w+x)*4); }
@@ -226,7 +239,7 @@ function generateSync(){
       if(px[o+3]<128){ map[i]=-1; continue; }
       let r=px[o],g=px[o+1],b=px[o+2];
       if(err){ r=clamp255(r+err[i*3]); g=clamp255(g+err[i*3+1]); b=clamp255(b+err[i*3+2]); }
-      if(bgLab){
+      if(p.cutBg&&bgLab){
         const lab=rgbToLab(r,g,b);
         if(ciede2000(lab[0],lab[1],lab[2],bgLab[0],bgLab[1],bgLab[2])<15){
           map[i]=-1; continue;
@@ -247,13 +260,89 @@ function generateSync(){
     }
   }
 
-  /* 颜色数上限：用量最少的颜色并入最近的在用色 */
+  /* ===== 硬性要求：沿图案轮廓的黑/白描边 =====
+     有可辨认背景/透明区时：描边贴着主体轮廓走（爱心周围跟爱心形状一圈）；
+     整图铺满（如照片）时：退化为最外圈方框描边。 */
+  const cols=state.palette.colors;
+  let blackIdx=0,wL=Infinity,whiteIdx=0,bL=-Infinity;
+  for(let i=0;i<cols.length;i++){
+    const L=cols[i].lab[0];
+    if(L<wL){ wL=L; blackIdx=i; }
+    if(L>bL){ bL=L; whiteIdx=i; }
+  }
+  let borderIdx=blackIdx, borderLabel='黑';
+
+  /* 内容区分类：主体 vs 背景（空格，或与背景色感知接近的格子） */
+  const bgIdx=(()=>{ let bi=0,bd=Infinity; for(let i=0;i<cols.length;i++){ const c=cols[i].lab; const d=ciede2000(bgLab[0],bgLab[1],bgLab[2],c[0],c[1],c[2]); if(d<bd){bd=d;bi=i;} } return bi; })();
+  const outTh=20;
+  const isOutContent=i=>{
+    if(map[i]===-1) return true;
+    const c=cols[map[i]].lab;
+    return ciede2000(c[0],c[1],c[2],bgLab[0],bgLab[1],bgLab[2])<outTh;
+  };
+  let outsideN=0, subjectN=0, edgeLSum=0, edgeN=0, hasEmpty=false;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const i=y*w+x;
+    if(map[i]===-1) hasEmpty=true;
+    if(isOutContent(i)){ outsideN++; continue; }
+    subjectN++;
+    let boundary=false;
+    for(let dy=-1;dy<=1&&!boundary;dy++)for(let dx=-1;dx<=1;dx++){
+      const nx=x+dx, ny=y+dy;
+      if(nx<0||ny<0||nx>=w||ny>=h){ boundary=true; break; }
+      if(isOutContent(ny*w+nx)){ boundary=true; break; }
+    }
+    if(boundary){ edgeLSum+=cols[map[i]].lab[0]; edgeN++; }
+  }
+  const caseA = hasEmpty || (outsideN/(w*h))>=0.12;   // 有背景可辨 → 轮廓描边
+
+  const meanEdgeL = edgeN>0 ? edgeLSum/edgeN : 100;
+  if(p.border==='white'){ borderIdx=whiteIdx; borderLabel='白'; }
+  else if(p.border==='auto' && meanEdgeL<50){ borderIdx=whiteIdx; borderLabel='白'; }
+
+  const fw=w+2, fh=h+2;
+  const fMap=new Int16Array(fw*fh);
+  if(caseA && subjectN>0){
+    /* 边距圈 = 背景（去背景时留空，保留背景时铺背景豆），随后描边贴轮廓生成 */
+    fMap.fill(p.cutBg?-1:bgIdx);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++) fMap[(y+1)*fw+(x+1)]=map[y*w+x];
+    /* 基于快照收集轮廓格：与主体 8 邻相接的背景格 → 描边色 */
+    const snap=new Int16Array(fMap);
+    const isOut=i=>{
+      const v=snap[i];
+      if(v===-1) return true;
+      const c=cols[v].lab;
+      return ciede2000(c[0],c[1],c[2],bgLab[0],bgLab[1],bgLab[2])<outTh;
+    };
+    const toOutline=[];
+    for(let y=0;y<fh;y++)for(let x=0;x<fw;x++){
+      const i=y*fw+x;
+      if(!isOut(i)) continue;
+      let touch=false;
+      for(let dy=-1;dy<=1&&!touch;dy++)for(let dx=-1;dx<=1;dx++){
+        if(!dx&&!dy) continue;
+        const nx=x+dx, ny=y+dy;
+        if(nx<0||ny<0||nx>=fw||ny>=fh) continue;
+        if(!isOut(ny*fw+nx)){ touch=true; break; }
+      }
+      if(touch) toOutline.push(i);
+    }
+    for(const i of toOutline) fMap[i]=borderIdx;
+  }else{
+    /* 无背景可辨：整图铺满 → 最外一圈方框描边 */
+    fMap.fill(-1);
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++) fMap[(y+1)*fw+(x+1)]=map[y*w+x];
+    for(let x=0;x<fw;x++){ fMap[x]=borderIdx; fMap[(fh-1)*fw+x]=borderIdx; }
+    for(let y=0;y<fh;y++){ fMap[y*fw]=borderIdx; fMap[y*fw+fw-1]=borderIdx; }
+  }
+
+  /* 颜色数上限：用量最少的颜色并入最近的在用色（描边色受保护，永不被合并） */
   let cap=p.maxColors; if(cap===0) cap=64;
   const counts=new Map();
-  for(let i=0;i<map.length;i++){ const v=map[i]; if(v>=0) counts.set(v,(counts.get(v)||0)+1); }
+  for(let i=0;i<fMap.length;i++){ const v=fMap[i]; if(v>=0) counts.set(v,(counts.get(v)||0)+1); }
   while(counts.size>cap){
     let minIdx=-1,minC=Infinity;
-    for(const [k,c] of counts){ if(c<minC){ minC=c; minIdx=k; } }
+    for(const [k,c] of counts){ if(k!==borderIdx&&c<minC){ minC=c; minIdx=k; } }
     if(minIdx<0) break;
     let best=-1,bd=Infinity;
     const a=state.palette.colors[minIdx].lab;
@@ -264,12 +353,13 @@ function generateSync(){
       if(d<bd){bd=d;best=k;}
     }
     if(best<0) break;
-    for(let i=0;i<map.length;i++) if(map[i]===minIdx) map[i]=best;
+    for(let i=0;i<fMap.length;i++) if(fMap[i]===minIdx) fMap[i]=best;
     counts.set(best,(counts.get(best)||0)+minC);
     counts.delete(minIdx);
   }
 
-  state.map=map; state.w=w; state.h=h;
+  state.map=fMap; state.w=fw; state.h=fh;
+  state.borderIdx=borderIdx; state.borderLabel=borderLabel;
   state.counts=counts;
   state.total=[...counts.values()].reduce((s,v)=>s+v,0);
   state.usedCount=counts.size;
@@ -304,6 +394,8 @@ function renderAll(){
   $('statSize').textContent=`${state.w}×${state.h}`;
   $('statTotal').textContent=state.total.toLocaleString();
   $('statColors').textContent=state.usedCount;
+  $('statBorder').textContent=(state.counts.get(state.borderIdx)||0).toLocaleString();
+  $('statBorderLabel').textContent=`${state.borderLabel}边豆数`;
   renderPreview($('numToggle').checked);
   renderBOM();
 }
@@ -371,7 +463,7 @@ function exportCanvas(numbered){
   ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
   ctx.fillStyle='#2d2a26';
   ctx.font='700 30px system-ui,sans-serif'; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
-  ctx.fillText(`${w}×${h} 颗 · 共 ${state.total.toLocaleString()} 豆 · ${state.usedCount} 色 · ${state.palette.label}`,pad,42);
+  ctx.fillText(`${w}×${h} 颗 · ${state.borderLabel||'描'}边沿轮廓 · 共 ${state.total.toLocaleString()} 豆 · ${state.usedCount} 色 · ${state.palette.label}`,pad,42);
   ctx.fillStyle='#8a8378'; ctx.font='15px system-ui,sans-serif';
   ctx.fillText('豆图纸生成 · 每 10 格一条辅助线 · 色号见配豆清单',pad,68);
 
@@ -439,7 +531,7 @@ function printView(){
     .credit{margin-top:20px;color:#999;font-size:12px}
   </style></head><body>
   <h1>${esc(state.imgName)} — 拼豆图纸 ${state.w}×${state.h}</h1>
-  <p class="sub">共 ${state.total.toLocaleString()} 豆 · ${state.usedCount} 色 · ${esc(state.palette.label)} · 由「豆图纸」免费生成</p>
+  <p class="sub">共 ${state.total.toLocaleString()} 豆 · ${state.usedCount} 色 · ${state.borderLabel||''}边沿轮廓描边 · ${esc(state.palette.label)} · 由「豆图纸」免费生成</p>
   <img src="${url}" alt="拼豆图纸">
   <h3 style="margin-top:22px">配豆清单</h3>
   <table><tr><th></th><th>豆号</th><th>名称</th><th>颗数</th></tr>${bomRows}</table>
@@ -469,6 +561,7 @@ function restoreSettings(){
     if(s.paletteId){ const opt=$('paletteSel').querySelector(`option[value="${s.paletteId}"]`); if(opt) $('paletteSel').value=s.paletteId; }
     if(s.maxColors!==undefined) $('maxColorsSel').value=String(s.maxColors);
     if(s.dither!==undefined) $('ditherSel').value=String(s.dither);
+    if(s.border){ const bo=$('borderSel').querySelector(`option[value="${s.border}"]`); if(bo) $('borderSel').value=s.border; }
     $('enhanceChk').checked=s.enhance!==false;
     $('cutBgChk').checked=!!s.cutBg;
   }catch(e){}
@@ -499,7 +592,7 @@ function bindEvents(){
     [...$('sizeChips').children].forEach(c=>c.classList.toggle('is-on',c===b));
     $('gridSize').value=b.dataset.w; updateSizeLabel(); queueRegen();
   });
-  ['maxColorsSel','ditherSel'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
+  ['maxColorsSel','ditherSel','borderSel'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
   ['enhanceChk','cutBgChk'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
 
   $('btnGenerate').addEventListener('click',()=>{ saveSettings(); generate(); });
