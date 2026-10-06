@@ -1,0 +1,13 @@
+{
+  "name": "豆图纸 · AI 拼豆图纸生成器",
+  "short_name": "豆图纸",
+  "description": "上传图片秒出可打印拼豆图纸和配豆清单，纯浏览器本地处理",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#fdf9f4",
+  "theme_color": "#ff7a59",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

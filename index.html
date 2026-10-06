@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>豆图纸 · AI 拼豆图纸生成器 — 上传图片，秒出可打印图纸</title>
+<meta name="description" content="上传任意图片，AI 自动匹配 MARD/Perler/Hama/Artkal 真实色号，生成可打印拼豆图纸和配豆清单。图片全程在浏览器本地处理，不上传服务器，免注册，永久免费。">
+<meta property="og:title" content="豆图纸 · AI 拼豆图纸生成器">
+<meta property="og:description" content="上传图片 → 秒出拼豆图纸 + 配豆清单。图片不上传服务器，免注册，永久免费。">
+<meta property="og:type" content="website">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#ff7a59">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg class="logo" viewBox="0 0 36 36" aria-hidden="true">
+        <rect width="36" height="36" rx="9" fill="#ff7a59"/>
+        <circle cx="11" cy="11" r="4.2" fill="#ffd166"/><circle cx="25" cy="11" r="4.2" fill="#ef476f"/>
+        <circle cx="11" cy="25" r="4.2" fill="#06d6a0"/><circle cx="25" cy="25" r="4.2" fill="#118ab2"/>
+      </svg>
+      <span>豆图纸</span><span class="brand-sub">AI 拼豆图纸生成器</span>
+    </a>
+    <div class="chips">
+      <span class="chip">🔒 图片不上传</span>
+      <span class="chip">🆓 免费·免注册</span>
+      <span class="chip">⚡ 秒级生成</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <h1>把任何图片，变成一张能直接开拼的图纸</h1>
+    <p class="hero-sub">AI 自动匹配真实豆子色号，生成<b>可打印图纸</b>和<b>配豆清单</b>。所有处理都在你自己的浏览器里完成。</p>
+  </section>
+
+  <!-- 第一步：选图 -->
+  <section class="card" id="uploadCard">
+    <div class="card-head"><span class="step-no">1</span><h2>选一张图</h2></div>
+    <div id="dropZone" class="dropzone" tabindex="0" role="button" aria-label="选择或拖入图片">
+      <input type="file" id="fileInput" accept="image/*" hidden>
+      <div class="dz-icon">🖼️</div>
+      <p class="dz-main">点击选择 · 拖拽图片到这里 · 或直接 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴</p>
+      <p class="dz-sub">支持 JPG / PNG / WebP，头像、宠物、卡通、Logo 都很合适</p>
+    </div>
+    <div id="imgMeta" class="img-meta" hidden>
+      <span id="imgName"></span>
+      <button class="btn btn-ghost btn-sm" id="btnChangeImg">换一张</button>
+    </div>
+    <button class="btn btn-ghost btn-sm demo-btn" id="btnDemo">🎲 试试示例图片</button>
+  </section>
+
+  <!-- 第二步：调参数 -->
+  <section class="card" id="settingsCard">
+    <div class="card-head"><span class="step-no">2</span><h2>调参数 <small class="muted">（都有默认值，直接生成也行）</small></h2></div>
+    <div class="grid-2">
+
+      <div class="field">
+        <label>豆板宽度 <b id="gridSizeLabel" class="accent">58</b> 颗</label>
+        <div class="size-chips" id="sizeChips">
+          <button class="sizechip" data-w="29">29</button>
+          <button class="sizechip" data-w="50">50</button>
+          <button class="sizechip is-on" data-w="58">58</button>
+          <button class="sizechip" data-w="75">75</button>
+          <button class="sizechip" data-w="100">100</button>
+          <button class="sizechip" data-w="150">150</button>
+        </div>
+        <input type="range" id="gridSize" min="10" max="220" value="58" step="1">
+        <p class="hint">成品尺寸 ≈ <b id="sizeOut">58×58 颗 · 5mm 豆约 29cm</b></p>
+      </div>
+
+      <div class="field">
+        <label for="paletteSel">豆子色板</label>
+        <select id="paletteSel"></select>
+        <p class="hint">MARD 是国内主流色号；其他品牌请按你手里的豆子选</p>
+      </div>
+
+      <div class="field">
+        <label for="maxColorsSel">最多用几种颜色</label>
+        <select id="maxColorsSel">
+          <option value="0" selected>AI 自动（推荐）</option>
+          <option value="12">12 色（省钱省事）</option>
+          <option value="24">24 色</option>
+          <option value="36">36 色</option>
+          <option value="48">48 色</option>
+          <option value="64">64 色</option>
+        </select>
+        <p class="hint">颜色越少越好配豆、越好拼，但细节会变少</p>
+      </div>
+
+      <div class="field">
+        <label for="ditherSel">细节过渡（抖动）</label>
+        <select id="ditherSel">
+          <option value="0">关 · 色块干净（卡通/Logo 推荐）</option>
+          <option value="0.5" selected>轻 · 照片推荐</option>
+          <option value="1">标准 · 渐变更细腻</option>
+        </select>
+        <p class="hint">照片开、卡通关，是最常用的组合</p>
+      </div>
+
+      <div class="field field-check">
+        <label class="switch-row"><input type="checkbox" id="enhanceChk" checked><span>自动优化画质（对比度+饱和度）</span></label>
+        <label class="switch-row"><input type="checkbox" id="cutBgChk"><span>去除纯色背景（做摆件/钥匙扣神器）</span></label>
+      </div>
+
+    </div>
+    <button class="btn btn-primary btn-xl" id="btnGenerate" disabled>✨ 生成图纸</button>
+  </section>
+
+  <!-- 第三步：结果 -->
+  <section class="card" id="resultCard" hidden>
+    <div class="card-head"><span class="step-no">3</span><h2>你的图纸</h2></div>
+    <div class="stats">
+      <div class="stat"><b id="statSize">—</b><span>尺寸（颗）</span></div>
+      <div class="stat"><b id="statTotal">—</b><span>总豆数</span></div>
+      <div class="stat"><b id="statColors">—</b><span>用色数</span></div>
+    </div>
+
+    <div class="preview-bar">
+      <label class="switch-row"><input type="checkbox" id="numToggle"><span>显示色号</span></label>
+      <button class="btn btn-ghost btn-sm" id="btnRedo">← 重新调整参数</button>
+    </div>
+    <div class="preview-box"><canvas id="previewCanvas"></canvas></div>
+
+    <h3 class="bom-title">配豆清单 <span class="muted">（按用量排序）</span></h3>
+    <div class="bom-wrap"><table class="bom" id="bomTable">
+      <thead><tr><th>颜色</th><th>豆号</th><th>名称</th><th>颗数</th><th>占比</th></tr></thead>
+      <tbody id="bomBody"></tbody>
+    </table></div>
+
+    <div class="export-row">
+      <button class="btn btn-primary" id="btnPng">📥 下载图纸 PNG</button>
+      <button class="btn btn-primary" id="btnPngNum">📥 下载带色号版</button>
+      <button class="btn btn-ghost" id="btnCsv">📥 配豆清单 CSV</button>
+      <button class="btn btn-ghost" id="btnPrint">🖨 打印 / 存 PDF</button>
+    </div>
+    <p class="hint center">图纸左上角每 10 格有辅助线，配豆时对照色号逐行拼即可</p>
+  </section>
+
+  <section class="faq">
+    <details><summary>图片会被上传吗？</summary><p>不会。豆图纸是纯网页工具，全部处理在你的浏览器里完成，断网都能用，没有服务器也就没有泄露。</p></details>
+    <details><summary>色号和我买的豆子对得上吗？</summary><p>色板数据来自公开色卡整理（MARD 221/291、Perler、Hama、Artkal S、Nabbi）。不同批次豆子可能有轻微色差，下单前建议按豆号小样核对。</p></details>
+    <details><summary>多大尺寸合适？</summary><p>钥匙扣选 29；手机壳/冰箱贴选 50～58；挂画 75～100；巨幅像素画 150+。宽度定了之后高度按图片比例自动计算。</p></details>
+    <details><summary>免费？图什么？</summary><p>免费、无广告、无注册。喜欢的话把链接分享给拼豆搭子就行。</p></details>
+  </section>
+
+  <footer class="footer">
+    <p>豆图纸 DouTuZhi — 永久免费 · 永久有效 · <a href="https://github.com/XuBe1You/dou-tuzhi" target="_blank" rel="noopener">开源地址</a></p>
+    <p class="muted small">色板数据：Color data by <a href="https://makebead.com" target="_blank" rel="noopener">MakeBead</a> (craft-color-codes), CC BY 4.0</p>
+  </footer>
+
+</main>
+
+<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText">AI 正在配色…</p></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="palettes.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
