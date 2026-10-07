@@ -1,5 +1,5 @@
 /* 豆图纸 Service Worker — 缓存优先+后台更新，离线可用，站点永久有效 */
-const CACHE = 'doutu-v4';
+const CACHE = 'doutu-v5';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './palettes.js', './icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', e => {

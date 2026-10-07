@@ -51,7 +51,8 @@ const state={
   palette:null,
   map:null, w:0, h:0,
   counts:null, total:0, usedCount:0,
-  borderIdx:-1, borderLabel:'',
+  borderIdx:-1, borderLabel:'', outlineCount:0,
+  ortSession:null,
   busy:false, regenTimer:null,
 };
 
@@ -190,8 +191,44 @@ function currentParams(){
     dither:parseFloat($('ditherSel').value),
     enhance:$('enhanceChk').checked,
     cutBg:$('cutBgChk').checked,
+    aiSeg:$('aiSegChk').checked,
     border:$('borderSel').value,
   };
+}
+
+/* ================= AI 主体识别（u2netp，浏览器本地推理） ================= */
+async function ensureOrtSession(){
+  if(state.ortSession) return state.ortSession;
+  if(!window.ort) throw new Error('ort 未加载');
+  ort.env.wasm.numThreads=1;
+  state.ortSession=await ort.InferenceSession.create('models/u2netp.onnx',{executionProviders:['wasm'],graphOptimizationLevel:'all'});
+  return state.ortSession;
+}
+async function segmentSubject(){
+  const S=320;
+  const c=document.createElement('canvas'); c.width=S; c.height=S;
+  const cx=c.getContext('2d',{willReadFrequently:true});
+  cx.drawImage(state.bitmap,0,0,S,S);
+  const d=cx.getImageData(0,0,S,S).data;
+  const data=new Float32Array(3*S*S);
+  const mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225];
+  for(let i=0;i<S*S;i++){
+    data[i]      =((d[i*4]  /255)-mean[0])/std[0];
+    data[S*S+i]  =((d[i*4+1]/255)-mean[1])/std[1];
+    data[2*S*S+i]=((d[i*4+2]/255)-mean[2])/std[2];
+  }
+  const session=await ensureOrtSession();
+  const inputName=session.inputNames[0]||'input';
+  const feeds={}; feeds[inputName]=new ort.Tensor('float32',data,[1,3,S,S]);
+  const results=await session.run(feeds);
+  const out=results[session.outputNames[0]||Object.keys(results)[0]];
+  const raw=out.data, n=S*S;
+  let mx=-Infinity, mi=Infinity;
+  for(let i=0;i<n;i++){ if(raw[i]>mx) mx=raw[i]; if(raw[i]<mi) mi=raw[i]; }
+  const span=(mx-mi)||1;
+  const mask=new Float32Array(n);
+  for(let i=0;i<n;i++) mask[i]=(raw[i]-mi)/span;
+  return mask;
 }
 
 /* ================= 核心：生成 ================= */
@@ -199,13 +236,16 @@ function generate(){
   if(!state.bitmap||state.busy) return;
   state.busy=true;
   $('busy').hidden=false;
+  $('busyText').textContent=currentParams().aiSeg?'AI 识别主体中…（首次需加载模型，稍等几秒）':'AI 正在配色…';
   setTimeout(()=>{
-    try{ generateSync(); }
-    catch(err){ console.error(err); toast('生成失败：'+err.message); }
-    state.busy=false; $('busy').hidden=true;
+    (async()=>{
+      try{ await generateSync(); }
+      catch(err){ console.error(err); toast('生成失败：'+err.message); }
+      finally{ state.busy=false; $('busy').hidden=true; }
+    })();
   },30);
 }
-function generateSync(){
+async function generateSync(){
   const p=currentParams();
   loadPalette();
 
@@ -215,6 +255,21 @@ function generateSync(){
 
   const img=drawScaled(state.bitmap,w,h,p.enhance);
   const px=img.data;
+
+  /* AI 主体识别：320×320 显著性掩码（失败自动回退颜色模式） */
+  let aiMask=null;
+  if(p.aiSeg){
+    try{ aiMask=await segmentSubject(); }
+    catch(e){ console.error(e); toast('AI 识别加载失败，已用快速模式'); }
+  }
+  /* 格子级掩码采样：对格子覆盖的掩码区域求平均（抗锯齿） */
+  const maskAt=(x,y)=>{
+    const x0=Math.floor(x*320/w), x1=Math.max(x0+1,Math.floor((x+1)*320/w));
+    const y0=Math.floor(y*320/h), y1=Math.max(y0+1,Math.floor((y+1)*320/h));
+    let s=0,c=0;
+    for(let yy=y0;yy<y1&&yy<320;yy++)for(let xx=x0;xx<x1&&xx<320;xx++){ s+=aiMask[yy*320+xx]; c++; }
+    return c?s/c:0;
+  };
 
   /* 背景检测：内容区四边取中位色（去背景与轮廓描边都要用） */
   let bgLab=null;
@@ -239,10 +294,13 @@ function generateSync(){
       if(px[o+3]<128){ map[i]=-1; continue; }
       let r=px[o],g=px[o+1],b=px[o+2];
       if(err){ r=clamp255(r+err[i*3]); g=clamp255(g+err[i*3+1]); b=clamp255(b+err[i*3+2]); }
-      if(p.cutBg&&bgLab){
-        const lab=rgbToLab(r,g,b);
-        if(ciede2000(lab[0],lab[1],lab[2],bgLab[0],bgLab[1],bgLab[2])<15){
-          map[i]=-1; continue;
+      if(p.cutBg){
+        if(aiMask){ if(maskAt(x,y)<0.5){ map[i]=-1; continue; } }   /* AI 模式：非主体直接抠掉（白猫白底也能保住） */
+        else if(bgLab){
+          const lab=rgbToLab(r,g,b);
+          if(ciede2000(lab[0],lab[1],lab[2],bgLab[0],bgLab[1],bgLab[2])<15){
+            map[i]=-1; continue;
+          }
         }
       }
       const idx=nearest(Math.round(r),Math.round(g),Math.round(b));
@@ -272,19 +330,21 @@ function generateSync(){
   }
   let borderIdx=blackIdx, borderLabel='黑';
 
-  /* 内容区分类：主体 vs 背景（空格，或与背景色感知接近的格子） */
+  /* 内容区分类：主体 vs 背景（AI 掩码优先，否则按背景色感知距离） */
   const bgIdx=(()=>{ let bi=0,bd=Infinity; for(let i=0;i<cols.length;i++){ const c=cols[i].lab; const d=ciede2000(bgLab[0],bgLab[1],bgLab[2],c[0],c[1],c[2]); if(d<bd){bd=d;bi=i;} } return bi; })();
   const outTh=20;
   const isOutContent=i=>{
     if(map[i]===-1) return true;
+    if(aiMask){ const x=i%w, y=(i/w)|0; return maskAt(x,y)<0.5; }
     const c=cols[map[i]].lab;
     return ciede2000(c[0],c[1],c[2],bgLab[0],bgLab[1],bgLab[2])<outTh;
   };
+  const outFlag=new Uint8Array(w*h);                 /* 1=背景/空格 0=主体 */
   let outsideN=0, subjectN=0, edgeLSum=0, edgeN=0, hasEmpty=false;
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
     const i=y*w+x;
     if(map[i]===-1) hasEmpty=true;
-    if(isOutContent(i)){ outsideN++; continue; }
+    if(isOutContent(i)){ outsideN++; outFlag[i]=1; continue; }
     subjectN++;
     let boundary=false;
     for(let dy=-1;dy<=1&&!boundary;dy++)for(let dx=-1;dx<=1;dx++){
@@ -294,7 +354,32 @@ function generateSync(){
     }
     if(boundary){ edgeLSum+=cols[map[i]].lab[0]; edgeN++; }
   }
-  const caseA = hasEmpty || (outsideN/(w*h))>=0.12;   // 有背景可辨 → 轮廓描边
+  /* 连通域去噪：丢掉面积过小的孤立主体碎片 */
+  {
+    const minSize=Math.max(12, Math.round(subjectN*0.02));
+    const comp=new Int32Array(w*h);
+    const sizes=[0];
+    const stack=[];
+    for(let s=0;s<w*h;s++){
+      if(outFlag[s]!==0||comp[s]!==0) continue;
+      const id=sizes.length;
+      let size=0;
+      stack.push(s); comp[s]=id;
+      while(stack.length){
+        const i=stack.pop(); size++;
+        const x=i%w, y=(i/w)|0;
+        if(x>0&&outFlag[i-1]===0&&comp[i-1]===0){comp[i-1]=id;stack.push(i-1);}
+        if(x<w-1&&outFlag[i+1]===0&&comp[i+1]===0){comp[i+1]=id;stack.push(i+1);}
+        if(y>0&&outFlag[i-w]===0&&comp[i-w]===0){comp[i-w]=id;stack.push(i-w);}
+        if(y<h-1&&outFlag[i+w]===0&&comp[i+w]===0){comp[i+w]=id;stack.push(i+w);}
+      }
+      sizes.push(size);
+    }
+    for(let i=0;i<w*h;i++){
+      if(outFlag[i]===0&&sizes[comp[i]]<minSize){ outFlag[i]=1; }
+    }
+  }
+  const caseA = aiMask ? subjectN>0 : (hasEmpty || (outsideN/(w*h))>=0.12);
 
   const meanEdgeL = edgeN>0 ? edgeLSum/edgeN : 100;
   if(p.border==='white'){ borderIdx=whiteIdx; borderLabel='白'; }
@@ -305,35 +390,34 @@ function generateSync(){
   if(caseA && subjectN>0){
     /* 边距圈 = 背景（去背景时留空，保留背景时铺背景豆），随后描边贴轮廓生成 */
     fMap.fill(p.cutBg?-1:bgIdx);
-    for(let y=0;y<h;y++)for(let x=0;x<w;x++) fMap[(y+1)*fw+(x+1)]=map[y*w+x];
-    /* 基于快照收集轮廓格：与主体 8 邻相接的背景格 → 描边色 */
-    const snap=new Int16Array(fMap);
-    const isOut=i=>{
-      const v=snap[i];
-      if(v===-1) return true;
-      const c=cols[v].lab;
-      return ciede2000(c[0],c[1],c[2],bgLab[0],bgLab[1],bgLab[2])<outTh;
-    };
+    const flagF=new Uint8Array(fw*fh).fill(1);       /* 边距圈=背景 */
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      fMap[(y+1)*fw+(x+1)]=map[y*w+x];
+      flagF[(y+1)*fw+(x+1)]=outFlag[y*w+x];
+    }
+    /* 轮廓格 = 与主体 8 邻相接的背景格 → 描边色（基于分类标志，稳定无串色） */
     const toOutline=[];
     for(let y=0;y<fh;y++)for(let x=0;x<fw;x++){
       const i=y*fw+x;
-      if(!isOut(i)) continue;
+      if(!flagF[i]) continue;
       let touch=false;
       for(let dy=-1;dy<=1&&!touch;dy++)for(let dx=-1;dx<=1;dx++){
         if(!dx&&!dy) continue;
         const nx=x+dx, ny=y+dy;
         if(nx<0||ny<0||nx>=fw||ny>=fh) continue;
-        if(!isOut(ny*fw+nx)){ touch=true; break; }
+        if(!flagF[ny*fw+nx]){ touch=true; break; }
       }
       if(touch) toOutline.push(i);
     }
     for(const i of toOutline) fMap[i]=borderIdx;
+    state.outlineCount=toOutline.length;
   }else{
     /* 无背景可辨：整图铺满 → 最外一圈方框描边 */
     fMap.fill(-1);
     for(let y=0;y<h;y++)for(let x=0;x<w;x++) fMap[(y+1)*fw+(x+1)]=map[y*w+x];
     for(let x=0;x<fw;x++){ fMap[x]=borderIdx; fMap[(fh-1)*fw+x]=borderIdx; }
     for(let y=0;y<fh;y++){ fMap[y*fw]=borderIdx; fMap[y*fw+fw-1]=borderIdx; }
+    state.outlineCount=2*(fw+fh)-4;
   }
 
   /* 颜色数上限：用量最少的颜色并入最近的在用色（描边色受保护，永不被合并） */
@@ -394,7 +478,7 @@ function renderAll(){
   $('statSize').textContent=`${state.w}×${state.h}`;
   $('statTotal').textContent=state.total.toLocaleString();
   $('statColors').textContent=state.usedCount;
-  $('statBorder').textContent=(state.counts.get(state.borderIdx)||0).toLocaleString();
+  $('statBorder').textContent=(state.outlineCount||0).toLocaleString();
   $('statBorderLabel').textContent=`${state.borderLabel}边豆数`;
   renderPreview($('numToggle').checked);
   renderBOM();
@@ -564,6 +648,7 @@ function restoreSettings(){
     if(s.border){ const bo=$('borderSel').querySelector(`option[value="${s.border}"]`); if(bo) $('borderSel').value=s.border; }
     $('enhanceChk').checked=s.enhance!==false;
     $('cutBgChk').checked=!!s.cutBg;
+    $('aiSegChk').checked=!!s.aiSeg;
   }catch(e){}
 }
 
@@ -593,7 +678,7 @@ function bindEvents(){
     $('gridSize').value=b.dataset.w; updateSizeLabel(); queueRegen();
   });
   ['maxColorsSel','ditherSel','borderSel'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
-  ['enhanceChk','cutBgChk'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
+  ['enhanceChk','cutBgChk','aiSegChk'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
 
   $('btnGenerate').addEventListener('click',()=>{ saveSettings(); generate(); });
   $('btnRedo').addEventListener('click',()=>$('settingsCard').scrollIntoView({behavior:'smooth'}));
