@@ -270,6 +270,17 @@ async function generateSync(){
     for(let yy=y0;yy<y1&&yy<320;yy++)for(let xx=x0;xx<x1&&xx<320;xx++){ s+=aiMask[yy*320+xx]; c++; }
     return c?s/c:0;
   };
+  /* 暗主体自动提亮：主体平均亮度过低时（如黑毛宠物）重绘提亮，保住毛发细节 */
+  if(p.enhance&&aiMask){
+    let s=0,n=0;
+    for(let yy=0;yy<h;yy++)for(let xx=0;xx<w;xx++){
+      if(maskAt(xx,yy)>=0.5){ const o=(yy*w+xx)*4; s+=0.299*px[o]+0.587*px[o+1]+0.114*px[o+2]; n++; }
+    }
+    if(n>0&&(s/n)<40){
+      const img2=drawScaled(state.bitmap,w,h,true,'brightness(1.25)');
+      px.set(img2.data);
+    }
+  }
 
   /* 背景检测：内容区四边取中位色（去背景与轮廓描边都要用） */
   let bgLab=null;
@@ -455,7 +466,7 @@ async function generateSync(){
 function addErr(arr,o,r,g,b){ arr[o]+=r; arr[o+1]+=g; arr[o+2]+=b; }
 function clamp255(v){ return v<0?0:(v>255?255:v); }
 
-function drawScaled(bitmap,tw,th,enhance){
+function drawScaled(bitmap,tw,th,enhance,extraFilter){
   let src=bitmap, sw=bitmap.width||bitmap.naturalWidth, sh=bitmap.height||bitmap.naturalHeight;
   while(sw>=tw*2&&sh>=th*2){
     const nw=Math.max(tw,Math.floor(sw/2)), nh=Math.max(th,Math.floor(sh/2));
@@ -468,7 +479,7 @@ function drawScaled(bitmap,tw,th,enhance){
   const c=document.createElement('canvas'); c.width=tw; c.height=th;
   const cx=c.getContext('2d',{willReadFrequently:true});
   cx.imageSmoothingEnabled=true; cx.imageSmoothingQuality='high';
-  try{ if(enhance) cx.filter='saturate(1.22) contrast(1.07)'; }catch(e){}
+  try{ if(enhance) cx.filter='saturate(1.22) contrast(1.07)'+(extraFilter?' '+extraFilter:''); }catch(e){}
   cx.drawImage(src,0,0,tw,th);
   return cx.getImageData(0,0,tw,th);
 }
@@ -678,7 +689,15 @@ function bindEvents(){
     $('gridSize').value=b.dataset.w; updateSizeLabel(); queueRegen();
   });
   ['maxColorsSel','ditherSel','borderSel'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
-  ['enhanceChk','cutBgChk','aiSegChk'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
+  ['enhanceChk','cutBgChk'].forEach(id=>$(id).addEventListener('change',()=>{saveSettings();queueRegen();}));
+  $('aiSegChk').addEventListener('change',()=>{
+    /* 照片模式引导：开 AI 识别时若抖动关闭则自动打开，并提示大尺寸 */
+    if($('aiSegChk').checked&&$('ditherSel').value==='0'){
+      $('ditherSel').value='0.5';
+      toast('照片模式：已自动开启细节过渡，建议豆板 100 颗以上');
+    }
+    saveSettings();queueRegen();
+  });
 
   $('btnGenerate').addEventListener('click',()=>{ saveSettings(); generate(); });
   $('btnRedo').addEventListener('click',()=>$('settingsCard').scrollIntoView({behavior:'smooth'}));
